@@ -1,7 +1,7 @@
 "use client";
 
 import { useForm } from "react-hook-form";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 
 type ProductFormData = {
@@ -12,6 +12,27 @@ type ProductFormData = {
   isDigital: boolean;
   image: FileList;
 };
+
+const PRESET_PROMPTS = [
+  {
+    label: "Fondo neutro premium",
+    prompt:
+      "Edita esta foto de producto para e-commerce. Mantén intacto el producto principal. Reemplaza el fondo por un fondo neutro premium de color gris claro degradado con iluminación de estudio suave. Agrega sombras sutiles naturales debajo del producto. La imagen debe verse profesional y lista para catálogo.",
+  },
+  {
+    label: "Look de estudio",
+    prompt:
+      "Edita esta foto de producto para e-commerce. Mantén intacto el producto principal. Aplica iluminación profesional de estudio fotográfico con luces key y fill. Agrega reflejos controlados, sombras suaves y un fondo blanco puro. La imagen debe parecer tomada en un estudio profesional.",
+  },
+  {
+    label: "Contexto suave minimalista",
+    prompt:
+      "Edita esta foto de producto para e-commerce. Mantén intacto el producto principal. Coloca el producto en un entorno minimalista suave con superficie clara y fondo desenfocado en tonos neutros. Agrega iluminación natural difusa y sombras delicadas. La imagen debe transmitir elegancia y simplicidad.",
+  },
+];
+
+const DEFAULT_PROMPT =
+  "Edita esta foto de producto para e-commerce. Mantén intacto el producto principal (misma forma, proporciones, textura, color base, logotipo y detalles de marca). Solo mejora elementos secundarios: iluminación, sombras suaves, fondo limpio/neutral, reflejos controlados y nitidez general. No cambies el diseño del producto, no agregues ni quites partes, no cambies el encuadre principal. Entrega una imagen realista y comercial lista para catálogo.";
 
 export default function EditProductPage() {
   const router = useRouter();
@@ -30,6 +51,15 @@ export default function EditProductPage() {
   const [error, setError] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
+
+  // AI Transform state
+  const [aiPrompt, setAiPrompt] = useState(DEFAULT_PROMPT);
+  const [isTransforming, setIsTransforming] = useState(false);
+  const [transformedPreview, setTransformedPreview] = useState<string | null>(null);
+  const [transformedPath, setTransformedPath] = useState<string | null>(null);
+  const [transformError, setTransformError] = useState<string | null>(null);
+  const [transformSource, setTransformSource] = useState<"upload" | "current" | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   const isDigital = watch("isDigital");
 
@@ -74,6 +104,63 @@ export default function EditProductPage() {
         setImagePreview(reader.result as string);
       };
       reader.readAsDataURL(file);
+      // Reset transform when new image is selected
+      setTransformedPreview(null);
+      setTransformedPath(null);
+      setTransformError(null);
+      setTransformSource(null);
+    }
+  };
+
+  const handleTransform = async (source: "upload" | "current") => {
+    setIsTransforming(true);
+    setTransformError(null);
+    setTransformSource(source);
+
+    try {
+      const formData = new FormData();
+      formData.append("prompt", aiPrompt);
+
+      if (source === "upload") {
+        const input = imageInputRef.current;
+        const file = input?.files?.[0];
+        if (!file) {
+          setTransformError("Primero selecciona una imagen para transformar");
+          setIsTransforming(false);
+          return;
+        }
+        formData.append("image", file);
+      } else if (source === "current" && currentImage) {
+        // Fetch the current image and send it
+        const imageResponse = await fetch(currentImage);
+        const blob = await imageResponse.blob();
+        formData.append("image", blob, "current-image.png");
+      } else {
+        setTransformError("No hay imagen disponible para transformar");
+        setIsTransforming(false);
+        return;
+      }
+
+      const response = await fetch("/api/admin/transform-image", {
+        method: "POST",
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        const errorMsg = result.details
+          ? `${result.error}: ${result.details}`
+          : result.error || "Error al transformar la imagen";
+        throw new Error(errorMsg);
+      }
+
+      setTransformedPreview(result.path);
+      setTransformedPath(result.path);
+    } catch (err) {
+      setTransformError(err instanceof Error ? err.message : "Error desconocido");
+    } finally {
+      setIsTransforming(false);
     }
   };
 
@@ -82,9 +169,10 @@ export default function EditProductPage() {
     setError(null);
 
     try {
-      // Upload new image if provided
-      let imagePath: string | null = null;
-      if (data.image && data.image.length > 0) {
+      let imagePath: string | null = transformedPath; // Use transformed image if available
+
+      // Upload new image if no transform was applied and a new file was selected
+      if (!imagePath && data.image && data.image.length > 0) {
         setIsUploadingImage(true);
         const formData = new FormData();
         formData.append("image", data.image[0]);
@@ -143,6 +231,10 @@ export default function EditProductPage() {
       setIsSubmitting(false);
     }
   };
+
+  const { ref: imageRegisterRef, ...imageRegisterRest } = register("image");
+
+  const hasImageForTransform = !!imagePreview || !!currentImage;
 
   if (isLoading) {
     return (
@@ -304,9 +396,13 @@ export default function EditProductPage() {
                 id="image"
                 type="file"
                 accept="image/*"
-                {...register("image")}
+                {...imageRegisterRest}
+                ref={(e) => {
+                  imageRegisterRef(e);
+                  imageInputRef.current = e;
+                }}
                 onChange={(e) => {
-                  register("image").onChange(e);
+                  imageRegisterRest.onChange(e);
                   onImageChange(e);
                 }}
                 className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -324,11 +420,122 @@ export default function EditProductPage() {
               )}
             </div>
 
+            {/* AI Transform Section */}
+            {hasImageForTransform && (
+              <div className="border border-purple-200 bg-purple-50 rounded-lg p-5 space-y-4">
+                <h3 className="text-lg font-semibold text-purple-900">
+                  Transformar con IA
+                </h3>
+                <p className="text-sm text-purple-700">
+                  Mejora la imagen del producto usando inteligencia artificial. Selecciona un preset o escribe tu propio prompt.
+                </p>
+
+                {/* Preset buttons */}
+                <div className="flex flex-wrap gap-2">
+                  {PRESET_PROMPTS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => setAiPrompt(preset.prompt)}
+                      className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                        aiPrompt === preset.prompt
+                          ? "bg-purple-600 text-white border-purple-600"
+                          : "bg-white text-purple-700 border-purple-300 hover:bg-purple-100"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setAiPrompt(DEFAULT_PROMPT)}
+                    className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                      aiPrompt === DEFAULT_PROMPT
+                        ? "bg-purple-600 text-white border-purple-600"
+                        : "bg-white text-purple-700 border-purple-300 hover:bg-purple-100"
+                    }`}
+                  >
+                    Default
+                  </button>
+                </div>
+
+                {/* Prompt textarea */}
+                <textarea
+                  rows={3}
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder="Escribe tu prompt personalizado..."
+                  className="w-full px-4 py-2 border border-purple-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                />
+
+                {/* Transform buttons */}
+                <div className="flex gap-2">
+                  {imagePreview && (
+                    <button
+                      type="button"
+                      onClick={() => handleTransform("upload")}
+                      disabled={isTransforming || !aiPrompt.trim()}
+                      className="flex-1 bg-purple-600 text-white py-2.5 px-4 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
+                    >
+                      {isTransforming && transformSource === "upload"
+                        ? "Transformando..."
+                        : "Transformar nueva imagen"}
+                    </button>
+                  )}
+                  {currentImage && !imagePreview && (
+                    <button
+                      type="button"
+                      onClick={() => handleTransform("current")}
+                      disabled={isTransforming || !aiPrompt.trim()}
+                      className="flex-1 bg-purple-600 text-white py-2.5 px-4 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
+                    >
+                      {isTransforming && transformSource === "current"
+                        ? "Transformando..."
+                        : "Transformar imagen actual"}
+                    </button>
+                  )}
+                </div>
+
+                {/* Transform error */}
+                {transformError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-md">
+                    <p className="text-sm text-red-800">{transformError}</p>
+                  </div>
+                )}
+
+                {/* Transformed preview */}
+                {transformedPreview && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-purple-900">Imagen transformada:</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={transformedPreview}
+                      alt="Transformed preview"
+                      className="max-w-xs rounded-md border border-purple-300"
+                    />
+                    <p className="text-xs text-purple-600">
+                      Esta imagen se usará al guardar el producto.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTransformedPreview(null);
+                        setTransformedPath(null);
+                      }}
+                      className="text-sm text-red-600 hover:text-red-800 underline"
+                    >
+                      Descartar transformación
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Botones */}
             <div className="flex gap-4 pt-4">
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isSubmitting || isTransforming}
                 className="flex-1 bg-blue-600 text-white py-3 px-6 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
               >
                 {isUploadingImage

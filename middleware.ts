@@ -105,5 +105,6 @@ export const config = {
     '/api/admin/products',
     '/api/admin/products/:path*',
     '/api/admin/upload-image',
+    '/api/admin/transform-image',
   ],
 };

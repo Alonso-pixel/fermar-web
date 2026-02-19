@@ -7,6 +7,7 @@ const envSchema = z.object({
   OWNER_EMAIL: z.string().email().optional(),
   ADMIN_USERNAME: z.string().min(1).optional(),
   ADMIN_PASSWORD: z.string().min(1).optional(),
+  GEMINI_API_KEY: z.string().min(1).optional(),
 });
 
 export const env = envSchema.parse({
@@ -16,4 +17,5 @@ export const env = envSchema.parse({
   OWNER_EMAIL: process.env.OWNER_EMAIL,
   ADMIN_USERNAME: process.env.ADMIN_USERNAME,
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
 });
